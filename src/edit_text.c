@@ -12,6 +12,7 @@
 // MASKS the last 5 bits of a character. 
 #define CTRL_KEY(k) ((k)&0x1f) 
 struct editor_config{
+  int cx,cy;
   int screen_rows;
   int screen_cols;
   struct termios orig_mode;
@@ -51,6 +52,22 @@ char editor_read_keypress(){
   while((rread = read(STDIN_FILENO,&c,1)) != 1){ //aparently assignment returns 1 on error 
     if(rread == -1 && errno != EAGAIN) die("[read]");
   }
+  if (c=='\x1b'){
+    char seq[3];
+
+    if( read(STDIN_FILENO,&seq[0],1) != 1)return '\x1b';
+    if( read(STDIN_FILENO,&seq[1],1) != 1)return '\x1b';
+
+    if (seq[0]=='['){
+      switch(seq[1]){
+        case 'A': return 'h';
+        case 'B': return 'l';
+        case 'C': return 'j';
+        case 'D': return 'k';
+      }
+    }
+  }
+
   return c;
 }
 
@@ -103,6 +120,8 @@ void ab_append(struct abuf *ab ,const char* s,int len){
     return;
   }
   memcpy(&new[ab->len],s,len); // copies s into *new after the initial length of the string
+  ab->b = new;
+  ab->len += len;
   
 }
 
@@ -111,8 +130,25 @@ void ab_free(struct abuf *ab){
 }
 
 /* input */
-void editor_process_keypress(){
 
+void editor_move_cursor(char key){
+  switch (key){
+  case 'h':
+    E.cx--; 
+  break;
+  case 'l':
+    E.cx++; 
+  break;
+  case 'j':
+    E.cy++; 
+  break;
+  case 'k':
+    E.cy--; 
+  break;
+  }
+}
+
+void editor_process_keypress(){
   char kp = editor_read_keypress();
 
   switch(kp){
@@ -121,10 +157,19 @@ void editor_process_keypress(){
       write(STDOUT_FILENO,"\x1b[H",3);
       exit(0);
       break;
+    case 'h':
+    case 'j':
+    case 'k':
+    case 'l':
+      editor_move_cursor(kp);
+    break;
   }
 }
 
+
+
 void init_editor(){
+  E.cx = E.cy = 0;
   if(get_window_size(&E.screen_rows, &E.screen_cols) == -1){
       die("[get_window_size]");
   }
@@ -132,20 +177,27 @@ void init_editor(){
 
 void editor_draw_rows(struct abuf* ab){
   for(int y=0;y<E.screen_rows;y++){
-    ab_append(ab, "~",1);
+    ab_append(ab,"~",1);
     if( y<E.screen_rows-1)ab_append(ab, "\r\n",2);
   }
 }
 
-void refresh_screen(){
+void editor_refresh_screen(){
   struct abuf ab = ABUF_INIT;
-
-  ab_append(&ab,"\x1b[2J",4);
+  
+  ab_append(&ab,"\x1b[?25l",6); //shows the cursor
+  ab_append(&ab,"\x1b[K",3);
   ab_append(&ab,"\x1b[H",3); 
+
 
   editor_draw_rows(&ab);
 
-  ab_append(&ab,"\x1b[H",3);
+  char buf[32];
+  /*ab_append(&ab,"\x1b[2J",3);*/
+  snprintf(buf,sizeof(buf),"\x1b[%d;%dH",E.cy + 1 , E.cx + 1);
+  ab_append(&ab,buf,strlen(buf));
+
+  ab_append(&ab,"\x1b[?25h",6); //hides the cursor
   write(STDOUT_FILENO,ab.b,ab.len);
 
   ab_free(&ab);
@@ -156,8 +208,8 @@ int main(int argc, char** argv){
   EnableRawMode();  
   init_editor();
   while( 1 ){
-    refresh_screen();
-    editor_process_keypress();
+    editor_refresh_screen();
+    editor_process_keypress(); // process blocks around here
   }
   return 0;
 }
